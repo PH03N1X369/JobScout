@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JobScout</title>
+  <meta name="description" content="Find relevant job listings from your resume and keywords.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233451d1'/%3E%3Ccircle cx='14' cy='14' r='6' fill='none' stroke='white' stroke-width='3'/%3E%3Cpath d='M18.5 18.5l6 6' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="8"/>
+        <circle cx="14" cy="14" r="6"/>
+        <path d="M18.5 18.5l6 6"/>
+      </svg>
+      <span class="brand-name">JobScout</span>
+    </div>
+    <p class="tagline">Upload your resume, add keywords, and get job listings ranked by fit.</p>
+  </header>
+
+  <main class="layout">
+    <aside class="panel search-panel">
+      <form id="search-form" novalidate>
+        <section class="field">
+          <h2 class="field-label">Resume <span class="optional">PDF, DOCX or TXT</span></h2>
+          <label class="dropzone" id="dropzone" for="resume-input">
+            <input type="file" id="resume-input" accept=".pdf,.docx,.txt,.md" hidden>
+            <svg class="dz-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0l-4 4m4-4l4 4M5 16v2a2 2 0 002 2h10a2 2 0 002-2v-2"/></svg>
+            <span class="dz-text" id="dropzone-text"><strong>Choose a file</strong> or drag it here</span>
+          </label>
+          <p class="status" id="resume-status" role="status" aria-live="polite"></p>
+          <p class="hint">Read in memory to find your skills, then discarded. It's never stored.</p>
+        </section>
+
+        <section class="field" id="profile" hidden>
+          <div class="field-head">
+            <h2 class="field-label">From your resume</h2>
+            <button type="button" class="link-btn" id="toggle-all-skills">Deselect all</button>
+          </div>
+          <p class="hint">Click to include or exclude. Selected items are used to rank jobs.</p>
+          <div class="chip-group">
+            <span class="chip-group-label">Roles</span>
+            <div class="chips" id="title-chips"></div>
+          </div>
+          <div class="chip-group">
+            <span class="chip-group-label">Skills</span>
+            <div class="chips" id="skill-chips"></div>
+          </div>
+        </section>
+
+        <section class="field">
+          <label class="field-label" for="keyword-input">Keywords</label>
+          <div class="tag-input" id="tag-input">
+            <div class="chips" id="keyword-chips"></div>
+            <input id="keyword-input" type="text" placeholder="e.g. python, product manager" autocomplete="off">
+          </div>
+          <p class="hint">Press Enter or comma to add. Keywords weigh most in ranking.</p>
+        </section>
+
+        <section class="field">
+          <label class="field-label" for="location-input">Location <span class="optional">optional</span></label>
+          <input id="location-input" class="text-input" type="text" placeholder="e.g. Berlin, New York, Remote" autocomplete="off">
+        </section>
+
+        <button type="submit" class="primary-btn" id="search-btn">
+          <span class="btn-label">Find jobs</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+        <p class="status error" id="search-error" role="alert"></p>
+      </form>
+
+      <div class="sources-note" id="sources-note"></div>
+    </aside>
+
+    <section class="results" aria-label="Results">
+      <div class="toolbar panel">
+        <div class="toolbar-row date-row">
+          <span class="toolbar-label" id="date-label">Date posted</span>
+          <div class="segmented" id="date-filter" role="radiogroup" aria-labelledby="date-label">
+            <button type="button" role="radio" data-days="1">24 hours</button>
+            <button type="button" role="radio" data-days="3">3 days</button>
+            <button type="button" role="radio" data-days="7">Week</button>
+            <button type="button" role="radio" data-days="14">2 weeks</button>
+            <button type="button" role="radio" data-days="30">Month</button>
+            <button type="button" role="radio" data-days="all">Any time</button>
+            <button type="button" role="radio" data-days="custom">Custom</button>
+          </div>
+        </div>
+        <div class="toolbar-row custom-range" id="custom-range" hidden>
+          <label>From <input type="date" id="date-from"></label>
+          <label>To <input type="date" id="date-to"></label>
+        </div>
+        <div class="toolbar-row">
+          <label class="select-wrap">Sort
+            <select id="sort-select">
+              <option value="relevance">Best match</option>
+              <option value="newest">Newest first</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="remote-only"> Remote only</label>
+          <input type="search" id="text-filter" class="text-input small" placeholder="Filter results…" aria-label="Filter results by text">
+        </div>
+        <div class="toolbar-row source-row" id="source-row" hidden>
+          <span class="toolbar-label">Sources</span>
+          <div class="chips" id="source-chips"></div>
+        </div>
+      </div>
+
+      <div class="boards panel" id="boards">
+        <div class="boards-head">
+          <h3>Search job boards</h3>
+          <span class="hint" id="boards-query"></span>
+        </div>
+        <div class="board-links" id="board-links"></div>
+      </div>
+
+      <div class="summary" id="summary" aria-live="polite"></div>
+      <div class="notices" id="notices"></div>
+      <ol class="job-list" id="job-list"></ol>
+      <button type="button" class="secondary-btn" id="show-more" hidden>Show more</button>
+
+      <div class="empty panel" id="empty-state">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="21" cy="21" r="12"/><path d="M30 30l9 9"/></svg>
+        <h3>Find jobs that fit you</h3>
+        <p>Upload your resume and/or add keywords, then press <strong>Find jobs</strong>. Use the date filter above to show only recent listings.</p>
+      </div>
+    </section>
+  </main>
+
+  <template id="job-template">
+    <li class="job panel">
+      <div class="job-main">
+        <div class="job-head">
+          <a class="job-title" target="_blank" rel="noopener"></a>
+          <span class="match"></span>
+        </div>
+        <div class="job-meta">
+          <span class="company"></span>
+          <span class="location"></span>
+          <span class="badge remote-badge" hidden>Remote</span>
+          <span class="salary"></span>
+          <span class="job-type"></span>
+        </div>
+        <p class="snippet"></p>
+        <div class="matched"></div>
+      </div>
+      <div class="job-side">
+        <time class="posted"></time>
+        <span class="source"></span>
+        <a class="view-btn" target="_blank" rel="noopener">View job <span aria-hidden="true">↗</span></a>
+      </div>
+    </li>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# In Render: New > Blueprint, pick this repository, then Apply.
+services:
+  - type: web
+    name: jobscout
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # One worker so every request shares the in-memory API cache and rate limits;
+    # threads let several searches wait on the job APIs at the same time.
+    startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 90 --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Optional keys for LinkedIn/Indeed/Glassdoor coverage. Render asks for
+      # values when you apply the Blueprint; leave them blank to skip.
+      - key: RAPIDAPI_KEY
+        sync: false
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false

@@ -1,0 +1,26 @@
+Alex Rivera
+Senior Data Engineer · alex.rivera@example.com · Austin, TX
+
+SUMMARY
+Data engineer with 6 years of experience building batch and streaming data pipelines,
+analytics platforms, and ML feature stores on AWS.
+
+SKILLS
+Python, SQL, Go, Spark (PySpark), Airflow, dbt, Kafka, Snowflake, PostgreSQL,
+AWS (S3, Glue, Redshift, AWS Lambda), Docker, Kubernetes, Terraform, CI/CD, Git
+
+EXPERIENCE
+Senior Data Engineer — Streamline Analytics (2022–present)
+- Designed ETL pipelines in Airflow and dbt processing 2B events/day into Snowflake.
+- Built real-time Kafka consumers in Python and Go feeding fraud-detection machine learning models.
+- Cut warehouse costs 30% by re-modeling data marts (data modeling, Snowflake clustering).
+
+Data Engineer — Brightwave Health (2019–2022)
+- Migrated on-prem Hadoop jobs to Spark on AWS EMR; orchestrated with Airflow.
+- Created Tableau dashboards and data quality checks with Great Expectations.
+
+Software Engineer — Nimbus Labs (2018–2019)
+- Built REST APIs with Flask and PostgreSQL; containerized services with Docker.
+
+EDUCATION
+B.S. Computer Science, University of Texas at Austin

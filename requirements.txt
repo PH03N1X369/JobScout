@@ -1,0 +1,6 @@
+flask>=3.0
+requests>=2.31
+pypdf>=4.0
+python-dotenv>=1.0
+# Production server (Linux hosts such as Render). Not used when running locally on Windows.
+gunicorn>=22.0; sys_platform != "win32"
