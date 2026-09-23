@@ -62,7 +62,8 @@
 
         <section class="field">
           <label class="field-label" for="location-input">Location <span class="optional">optional</span></label>
-          <input id="location-input" class="text-input" type="text" placeholder="e.g. Berlin, New York, Remote" autocomplete="off">
+          <input id="location-input" class="text-input" type="text" placeholder="e.g. Bengaluru, London, Remote" autocomplete="off">
+          <p class="hint" id="location-hint">Leave blank to see jobs anywhere.</p>
         </section>
 
         <button type="submit" class="primary-btn" id="search-btn">
@@ -100,7 +101,13 @@
               <option value="newest">Newest first</option>
             </select>
           </label>
-          <label class="check"><input type="checkbox" id="remote-only"> Remote only</label>
+          <label class="select-wrap">Work type
+            <select id="work-type">
+              <option value="any">Any</option>
+              <option value="remote">Remote only</option>
+              <option value="onsite">On-site / hybrid</option>
+            </select>
+          </label>
           <input type="search" id="text-filter" class="text-input small" placeholder="Filter results…" aria-label="Filter results by text">
         </div>
         <div class="toolbar-row source-row" id="source-row" hidden>
@@ -140,6 +147,7 @@
         <div class="job-meta">
           <span class="company"></span>
           <span class="location"></span>
+          <span class="badge local-badge" hidden></span>
           <span class="badge remote-badge" hidden>Remote</span>
           <span class="salary"></span>
           <span class="job-type"></span>

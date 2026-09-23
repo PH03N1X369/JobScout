@@ -12,10 +12,11 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 load_dotenv()
 
+from locations import resolve  # noqa: E402
 from ranking import pick_search_terms, rank_jobs  # noqa: E402
 from resume_parser import ResumeParseError, extract_text  # noqa: E402
 from skills import canonical_skill, canonical_title, extract_skills, extract_titles  # noqa: E402
-from sources import fetch_all, source_status  # noqa: E402
+from sources import ADZUNA_COUNTRIES, fetch_all, source_status  # noqa: E402
 
 MAX_UPLOAD_MB = 5
 
@@ -129,15 +130,36 @@ def search():
     skills = [canonical_skill(s) or s for s in _clean_list(body.get("skills"), 40)]
     titles = [canonical_title(t) or t for t in _clean_list(body.get("titles"), 5)]
     location = body.get("location")
-    location = location.strip()[:100] if isinstance(location, str) else ""
+    place = resolve(location[:100] if isinstance(location, str) else "")
 
     if not (keywords or skills or titles):
         return jsonify(error="Upload a resume or enter at least one keyword."), 400
 
     terms = pick_search_terms(keywords, titles, skills)
-    raw, report = fetch_all(terms, location)
-    jobs = rank_jobs(raw, keywords, skills, titles)
-    return jsonify(terms=terms, total=len(jobs), scanned=len(raw), sources=report, jobs=jobs)
+    raw, report = fetch_all(terms, place)
+    jobs = rank_jobs(raw, keywords, skills, titles, place)
+    return jsonify(terms=terms, total=len(jobs), scanned=len(raw), sources=report, jobs=jobs,
+                   location=place.to_dict(), tip=_coverage_tip(place, jobs))
+
+
+def _coverage_tip(place, jobs):
+    """Explain thin local results: the keyless sources are mostly remote-job boards."""
+    if place.kind not in ("city", "country", "unknown"):
+        return None
+    if sum(1 for j in jobs if j["locationMatch"] == "local") >= 5:
+        return None
+    enabled = {s["name"] for s in source_status() if s["enabled"]}
+    if {"Adzuna", "JSearch"} & enabled:
+        return None
+    keys = ["Adzuna", "JSearch"] if not place.country or place.country.lower() in ADZUNA_COUNTRIES else ["JSearch"]
+    return (f"Few on-site jobs in {place.label} come from the free sources, which mostly list remote roles. "
+            f"Use the job board links for local listings, or add a free {' or '.join(keys)} API key "
+            f"(see README) to include them here.")
+
+
+@app.get("/api/location")
+def location_lookup():
+    return jsonify(resolve(request.args.get("q", "")[:100]).to_dict())
 
 
 @app.errorhandler(413)

@@ -138,11 +138,13 @@ def format_salary(lo, hi, currency="USD", period=None):
 
 
 def make_job(*, source, title, company, url, posted, location="", tags=(), description="",
-             salary=None, job_type="", remote=None):
+             salary=None, job_type="", remote=None, where=None):
+    """`where` is the full location list when `location` is a shortened display version."""
     title = html_to_text(title, 200)
     if not title or not isinstance(url, str) or not url.startswith(("http://", "https://")):
         return None
     return {
+        "_where": where or "",
         "id": hashlib.sha1(f"{source}|{url}".encode()).hexdigest()[:16],
         "title": title,
         "company": html_to_text(company, 120) or "Unknown company",
@@ -164,7 +166,7 @@ def _pretty(value):
 
 # ---------------------------------------------------------- free sources ---
 
-def fetch_remoteok(terms, location):
+def fetch_remoteok(terms, place):
     data = _get_json("https://remoteok.com/api")
     return [make_job(
         source="Remote OK",
@@ -180,7 +182,7 @@ def fetch_remoteok(terms, location):
     ) for j in data[1:]]  # first element is the API legal notice
 
 
-def fetch_remotive(terms, location):
+def fetch_remotive(terms, place):
     data = _get_json("https://remotive.com/api/remote-jobs")
     return [make_job(
         source="Remotive",
@@ -197,7 +199,13 @@ def fetch_remotive(terms, location):
     ) for j in data.get("jobs", [])]
 
 
-def fetch_arbeitnow(terms, location):
+_ARBEITNOW_COUNTRIES = {"DE", "AT", "CH", "NL", "BE", "FR", "ES", "PT", "IT", "IE", "PL", "SE", "DK", "NO", "FI", "GB"}
+
+
+def fetch_arbeitnow(terms, place):
+    if place.country and place.country not in _ARBEITNOW_COUNTRIES:
+        return []  # European (mostly German) board; nothing to find elsewhere
+
     def page(n):
         data = _get_json("https://www.arbeitnow.com/api/job-board-api", {"page": n})
         return [make_job(
@@ -216,11 +224,25 @@ def fetch_arbeitnow(terms, location):
     return _gather(page, [1, 2])
 
 
-def fetch_jobicy(terms, location):
+# Jobicy filters by region slug, not country; each region also includes "Anywhere" jobs.
+_JOBICY_GEO = {
+    "US": "usa", "CA": "canada", "GB": "uk", "DE": "germany", "AU": "australia",
+    **{c: "apac" for c in ("IN", "SG", "MY", "PH", "ID", "JP", "PK", "BD", "LK", "NZ")},
+    **{c: "latam" for c in ("BR", "MX", "AR", "CO")},
+    **{c: "emea" for c in ("AT", "CH", "NL", "BE", "FR", "ES", "PT", "IT", "IE", "PL", "SE", "DK", "NO", "FI",
+                           "AE", "SA", "EG", "ZA", "NG", "KE")},
+}
+
+
+def fetch_jobicy(terms, place):
+    geo = _JOBICY_GEO.get(place.country)
+
     def query(term):
         params = {"count": 50}
         if term:
             params["tag"] = term
+        if geo:
+            params["geo"] = geo
         data = _get_json("https://jobicy.com/api/v2/remote-jobs", params)
         return [make_job(
             source="Jobicy",
@@ -240,10 +262,13 @@ def fetch_jobicy(terms, location):
     return _gather(query, [None] + list(terms[:4]))  # latest jobs + one tag search per term
 
 
-def fetch_himalayas(terms, location):
+def fetch_himalayas(terms, place):
     def query(args):
         term, offset = args
-        data = _get_json("https://himalayas.app/jobs/api/search", {"q": term, "limit": 20, "offset": offset})
+        params = {"q": term, "limit": 20, "offset": offset}
+        if place.country:
+            params["country"] = place.country  # only jobs open to candidates there
+        data = _get_json("https://himalayas.app/jobs/api/search", params)
         jobs = []
         for j in data.get("jobs", []):
             places = j.get("locationRestrictions") or []
@@ -254,6 +279,7 @@ def fetch_himalayas(terms, location):
                 url=j.get("applicationLink") or j.get("guid"),
                 posted=j.get("pubDate"),
                 location=(", ".join(places[:3]) + (" +more" if len(places) > 3 else "")) if places else "Worldwide",
+                where=", ".join(places),
                 tags=[c.replace("-", " ") for c in (j.get("categories") or [])[:6]],
                 description=j.get("description") or j.get("excerpt"),
                 salary=format_salary(j.get("minSalary"), j.get("maxSalary"), j.get("currency"), j.get("salaryPeriod")),
@@ -267,17 +293,19 @@ def fetch_himalayas(terms, location):
 
 # --------------------------------------------------- key-based sources ---
 
-def fetch_jsearch(terms, location):
+def fetch_jsearch(terms, place):
     """JSearch (RapidAPI) aggregates Google for Jobs: LinkedIn, Indeed, Glassdoor, company sites."""
     headers = {"X-RapidAPI-Key": os.environ["RAPIDAPI_KEY"], "X-RapidAPI-Host": "jsearch.p.rapidapi.com"}
+    where = place.label if place.kind in ("city", "country", "unknown") else ""
+    country = (place.country or os.environ.get("JSEARCH_COUNTRY", "us")).lower()
 
     def query(term):
         data = _get_json("https://jsearch.p.rapidapi.com/search", {
-            "query": f"{term} jobs" + (f" in {location}" if location else ""),
+            "query": f"{term} jobs" + (f" in {where}" if where else ""),
             "page": 1,
             "num_pages": 1,
             "date_posted": "month",
-            "country": os.environ.get("JSEARCH_COUNTRY", "us"),
+            "country": country,
         }, headers)
         jobs = []
         for j in data.get("data") or []:
@@ -302,13 +330,21 @@ def fetch_jsearch(terms, location):
     return _gather(query, list(terms[:2]))  # conserve the free-tier quota
 
 
-_ADZUNA_CURRENCY = {"gb": "GBP", "in": "INR", "ca": "CAD", "au": "AUD",
+_ADZUNA_CURRENCY = {"gb": "GBP", "in": "INR", "ca": "CAD", "au": "AUD", "nz": "NZD", "sg": "SGD", "za": "ZAR",
+                    "br": "BRL", "mx": "MXN", "pl": "PLN", "ch": "CHF",
                     **{c: "EUR" for c in ("de", "fr", "nl", "it", "es", "at", "be")}}
+ADZUNA_COUNTRIES = set(_ADZUNA_CURRENCY) | {"us"}
 
 
-def fetch_adzuna(terms, location):
-    country = os.environ.get("ADZUNA_COUNTRY", "us").lower()
+def fetch_adzuna(terms, place):
+    if place.country:
+        country = place.country.lower()
+        if country not in ADZUNA_COUNTRIES:
+            return []  # Adzuna doesn't cover this country
+    else:
+        country = os.environ.get("ADZUNA_COUNTRY", "us").lower()
     currency = _ADZUNA_CURRENCY.get(country, "USD")
+    where = place.city or (place.raw if place.kind == "unknown" else "")
 
     def query(term):
         params = {
@@ -319,8 +355,8 @@ def fetch_adzuna(terms, location):
             "max_days_old": 30,
             "sort_by": "date",
         }
-        if location:
-            params["where"] = location
+        if where:
+            params["where"] = where
         data = _get_json(f"https://api.adzuna.com/v1/api/jobs/{country}/search/1", params)
         jobs = []
         for j in data.get("results", []):
@@ -364,7 +400,7 @@ def source_status():
             for name, _, home, env in SOURCES]
 
 
-def fetch_all(terms, location=""):
+def fetch_all(terms, place):
     """Query every enabled source in parallel. Returns (jobs, per-source report)."""
     enabled = [(name, fetcher, home) for name, fetcher, home, env in SOURCES if _enabled(env)]
 
@@ -373,7 +409,7 @@ def fetch_all(terms, location=""):
         started = time.time()
         info = {"name": name, "homepage": home, "count": 0, "error": None}
         try:
-            jobs = [j for j in fetcher(terms, location) if j]
+            jobs = [j for j in fetcher(terms, place) if j]
             info["count"] = len(jobs)
         except Exception as exc:
             jobs = []

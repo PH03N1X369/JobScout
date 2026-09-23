@@ -10,11 +10,13 @@ Signals that the user didn't provide are left out and the rest re-weighted.
 import math
 import re
 
+from locations import classify
 from skills import keyword_regex, skill_field_regexes, title_regex, title_tokens
 
 TITLE_W, TAGS_W, DESC_W = 1.0, 0.75, 0.45
 SIGNAL_WEIGHTS = {"keywords": 0.5, "skills": 0.3, "title": 0.2}
 MIN_SCORE = 0.2
+LOCAL_BONUS = 0.08  # nudge jobs based in the searched city above equally relevant remote ones
 SNIPPET_LEN = 260
 
 
@@ -77,7 +79,8 @@ def _snippet(desc, regexes):
     return text
 
 
-def rank_jobs(jobs, keywords, skills, titles, limit=400):
+def rank_jobs(jobs, keywords, skills, titles, place=None, limit=400):
+    """Score, filter and de-duplicate jobs. With a place, only jobs available there are kept."""
     keywords = [k for k in keywords if k.strip()]
     kw_rules = []
     for k in keywords:
@@ -91,6 +94,10 @@ def rank_jobs(jobs, keywords, skills, titles, limit=400):
 
     seen = {}
     for job in jobs:
+        where = classify(job, place) if place and place.kind != "none" else None
+        if place and place.kind != "none" and not where:
+            continue  # not available in the searched location
+
         title, desc = job["title"], job["description"]
         tags = " , ".join(job["tags"])
 
@@ -125,9 +132,12 @@ def rank_jobs(jobs, keywords, skills, titles, limit=400):
         score = sum(signals[n] * w for n, w in active.items()) / total_weight
         if score < MIN_SCORE:
             continue
+        if where == "local":
+            score = min(1.0, score + LOCAL_BONUS)
 
-        out = {k: v for k, v in job.items() if k != "description"}
+        out = {k: v for k, v in job.items() if k != "description" and not k.startswith("_")}
         out.update({
+            "locationMatch": where,
             "score": round(score, 3),
             "match": "strong" if score >= 0.55 else "good" if score >= 0.35 else "partial",
             "matched": {

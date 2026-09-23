@@ -14,10 +14,16 @@ or a custom date range).
   Each result shows *why* it matched (keywords, role match, skills).
 - **Date filter** with counts next to each option. Filtering happens in the browser, so it's
   instant. There's also a custom from/to range.
-- **Other filters:** remote only, sources, and free-text filtering of the results. Sort by best
-  match or newest.
-- **Job board links** that open LinkedIn, Indeed, Glassdoor, ZipRecruiter, Google Jobs and Dice
-  with your query and date window already applied, for listings the APIs don't cover.
+- **Location** (e.g. `Bengaluru`, `Gurgaon`, `India`, `London`, `Remote`). You get jobs based in
+  that city plus remote jobs open to candidates in that country. Remote jobs limited to other
+  countries ("US only") are dropped. Common aliases work (Bangalore = Bengaluru,
+  Gurgaon/Noida = Delhi NCR). The places JobScout knows are listed in `locations.py`.
+- **Other filters:** work type (remote / on-site), sources, and free-text filtering of the
+  results. Sort by best match or newest.
+- **Job board links** that open LinkedIn, Indeed, Glassdoor, Google Jobs and others with your
+  query, location and date window already applied, for listings the APIs don't cover. The links
+  follow the location's country: India gets Naukri, in.indeed.com and glassdoor.co.in, while
+  US-only boards (ZipRecruiter, Dice) appear only for US or blank locations.
 
 ## Setup
 
@@ -115,5 +121,7 @@ To add a job source, write a `fetch_*` function in `sources.py` and add it to `S
   as keywords.
 - Job boards change their URL parameters from time to time, so a board link may open without the
   date filter applied. The URL builders are in `BOARDS` in `static/app.js`.
-- The Indeed link uses `indeed.com`. For another country, change it to that country's Indeed site
-  (e.g. `in.indeed.com`, `uk.indeed.com`).
+- The free sources are mostly remote-job boards, so a city search shows few on-site jobs unless
+  you add an Adzuna or JSearch key. Adzuna covers India, the US, the UK and about 15 other countries.
+- A place that isn't listed in `locations.py` is matched on its text as typed. Add its city and
+  aliases there to get full country-aware filtering.

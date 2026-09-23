@@ -32,7 +32,10 @@
     from: '',
     to: '',
     sort: prefs.get('sort', 'relevance'),
-    remoteOnly: prefs.get('remoteOnly', false),
+    workType: prefs.get('workType', 'any'),
+    loc: null,        // resolved form of what's typed in Location (drives the job board links)
+    searchLoc: null,  // the location the current results were searched with
+    tip: null,
     text: '',
     hiddenSources: new Set(),
     shown: PAGE_SIZE,
@@ -52,6 +55,7 @@
     keywordChips: $('#keyword-chips'),
     keywordInput: $('#keyword-input'),
     location: $('#location-input'),
+    locationHint: $('#location-hint'),
     searchBtn: $('#search-btn'),
     searchError: $('#search-error'),
     sourcesNote: $('#sources-note'),
@@ -60,7 +64,7 @@
     dateFrom: $('#date-from'),
     dateTo: $('#date-to'),
     sort: $('#sort-select'),
-    remoteOnly: $('#remote-only'),
+    workType: $('#work-type'),
     textFilter: $('#text-filter'),
     sourceRow: $('#source-row'),
     sourceChips: $('#source-chips'),
@@ -280,11 +284,37 @@
   el.tagInput.addEventListener('click', (e) => {
     if (e.target === el.tagInput || e.target === el.keywordChips) el.keywordInput.focus();
   });
+  let lookupTimer;
   el.location.addEventListener('input', () => {
     prefs.set('location', el.location.value);
+    clearTimeout(lookupTimer);
+    lookupTimer = setTimeout(lookupLocation, 250);
     renderBoards();
     markStale();
   });
+
+  async function lookupLocation() {
+    const q = el.location.value.trim();
+    try {
+      const res = await fetch('/api/location?q=' + encodeURIComponent(q));
+      if (q !== el.location.value.trim()) return;  // typed more since
+      state.loc = await res.json();
+    } catch {
+      state.loc = null;
+    }
+    renderLocationHint();
+    renderBoards();
+  }
+
+  function renderLocationHint() {
+    const p = state.loc;
+    let text = 'Leave blank to see jobs anywhere.';
+    if (p?.kind === 'city') text = `Jobs in ${p.label}, plus remote jobs open to ${p.country_name}.`;
+    else if (p?.kind === 'country') text = `Jobs in ${p.label}, plus remote jobs open to ${p.label}.`;
+    else if (p?.kind === 'remote') text = 'Remote jobs only, from anywhere.';
+    else if (p?.kind === 'unknown') text = `“${p.label}” isn't a place JobScout knows yet, so it matches that text, plus remote jobs open worldwide.`;
+    el.locationHint.textContent = text;
+  }
 
   // ------------------------------------------------------------- search --
 
@@ -319,6 +349,8 @@
       }));
       state.sources = data.sources;
       state.scanned = data.scanned;
+      state.searchLoc = data.location;
+      state.tip = data.tip;
       state.searched = true;
       state.stale = false;
       state.shown = PAGE_SIZE;
@@ -383,9 +415,9 @@
     prefs.set('sort', state.sort);
     render();
   });
-  el.remoteOnly.addEventListener('change', () => {
-    state.remoteOnly = el.remoteOnly.checked;
-    prefs.set('remoteOnly', state.remoteOnly);
+  el.workType.addEventListener('change', () => {
+    state.workType = el.workType.value;
+    prefs.set('workType', state.workType);
     state.shown = PAGE_SIZE;
     render();
   });
@@ -417,7 +449,8 @@
   }
 
   function passesOtherFilters(job) {
-    if (state.remoteOnly && !isRemote(job)) return false;
+    if (state.workType === 'remote' && !isRemote(job)) return false;
+    if (state.workType === 'onsite' && isRemote(job)) return false;
     if (state.hiddenSources.has(job.sourceGroup)) return false;
     if (state.text && !job.haystack.includes(state.text)) return false;
     return true;
@@ -448,7 +481,7 @@
       visible.sort((a, b) => (b.time ?? -Infinity) - (a.time ?? -Infinity) || a.rank - b.rank);
     }
 
-    renderSummary(visible.length);
+    renderSummary(visible);
     const page = visible.slice(0, state.shown);
     el.list.replaceChildren(...page.map(renderJob));
     el.showMore.hidden = visible.length <= state.shown;
@@ -464,7 +497,7 @@
           `${anyTime} matching job${anyTime === 1 ? ' is' : 's are'} outside it.`,
           { label: 'Show any time', onClick: () => { state.date = 'all'; prefs.set('date', 'all'); render(); } });
       } else {
-        setEmpty('No jobs match these filters', 'Try turning off “Remote only”, clearing the text filter, or re-enabling sources.');
+        setEmpty('No jobs match these filters', 'Try setting Work type to “Any”, clearing the text filter, or re-enabling sources.');
       }
     } else {
       el.empty.hidden = true;
@@ -511,16 +544,26 @@
     const failed = state.sources.filter((s) => s.error);
     el.notices.replaceChildren(...failed.map((s) =>
       make('p', 'notice', `Couldn't load ${s.name} (${s.error}). Showing results from the other sources.`)));
+    if (state.tip) el.notices.append(make('p', 'notice info', state.tip));
   }
 
-  function renderSummary(count) {
+  function renderSummary(visible) {
+    const count = visible.length;
     const when = state.date === 'custom'
       ? (dateRange() ? 'in your date range' : '')
       : DATE_PHRASE[state.date] || '';
-    const okSources = state.sources.filter((s) => !s.error).length;
+    const okSources = state.sources.filter((s) => !s.error && s.count).length;
+    const parts = [];
+    const loc = state.searchLoc;
+    if (loc && ['city', 'country', 'unknown'].includes(loc.kind)) {
+      const local = visible.filter((j) => j.locationMatch === 'local').length;
+      const openTo = loc.country_name ? `open to ${loc.country_name}` : 'open worldwide';
+      parts.push(`${local} in ${loc.label}`, `${count - local} remote ${openTo}`);
+    }
+    parts.push(`${state.jobs.length} relevant out of ${state.scanned.toLocaleString()} listings from ${okSources} source${okSources === 1 ? '' : 's'}`);
     el.summary.replaceChildren(
       make('strong', '', `${count} job${count === 1 ? '' : 's'}`),
-      document.createTextNode(`${when ? ' posted ' + when : ''} · ${state.jobs.length} relevant out of ${state.scanned.toLocaleString()} listings from ${okSources} source${okSources === 1 ? '' : 's'}`),
+      document.createTextNode(`${when ? ' posted ' + when : ''} · ${parts.join(' · ')}`),
     );
   }
 
@@ -538,6 +581,9 @@
 
     node.querySelector('.company').textContent = job.company;
     node.querySelector('.location').textContent = job.location;
+    const localBadge = node.querySelector('.local-badge');
+    localBadge.hidden = job.locationMatch !== 'local' || !state.searchLoc;
+    if (!localBadge.hidden) localBadge.textContent = `In ${state.searchLoc.label}`;
     node.querySelector('.remote-badge').hidden = !isRemote(job) || /\bremote\b/i.test(job.location);
     node.querySelector('.salary').textContent = job.salary || '';
     node.querySelector('.job-type').textContent = job.jobType || '';
@@ -592,23 +638,43 @@
     return url.toString();
   }
 
+  // Country sites for boards that have them; anything else uses the .com site.
+  const INDEED_HOST = {
+    IN: 'in.indeed.com', GB: 'uk.indeed.com', CA: 'ca.indeed.com', AU: 'au.indeed.com', NZ: 'nz.indeed.com',
+    DE: 'de.indeed.com', FR: 'fr.indeed.com', NL: 'nl.indeed.com', ES: 'es.indeed.com', IT: 'it.indeed.com',
+    IE: 'ie.indeed.com', SG: 'sg.indeed.com', AE: 'ae.indeed.com', MY: 'malaysia.indeed.com', PH: 'ph.indeed.com',
+    ZA: 'za.indeed.com',
+  };
+  const GLASSDOOR_HOST = {
+    IN: 'www.glassdoor.co.in', GB: 'www.glassdoor.co.uk', CA: 'www.glassdoor.ca', AU: 'www.glassdoor.com.au',
+    DE: 'www.glassdoor.de', FR: 'www.glassdoor.fr', NL: 'www.glassdoor.nl', IE: 'www.glassdoor.ie', SG: 'www.glassdoor.sg',
+  };
+  const isUS = (country) => !country || country === 'US';
+  const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+  // Each builder returns a URL, or null when the board doesn't serve that country.
   const BOARDS = [
     ['LinkedIn', ({ q, loc, days, remote }) => withParams('https://www.linkedin.com/jobs/search/', {
       keywords: q, location: loc, f_TPR: days ? `r${days * 86400}` : null, f_WT: remote ? '2' : null })],
-    ['Indeed', ({ q, loc, days, remote }) => withParams('https://www.indeed.com/jobs', {
+    ['Naukri', ({ q, loc, days, country }) => country !== 'IN' ? null
+      : withParams(`https://www.naukri.com/${slug(q)}-jobs${loc && loc.toLowerCase() !== 'india' ? '-in-' + slug(loc) : ''}`, {
+        k: q, l: loc, jobAge: days ? roundUp([1, 3, 7, 15, 30], days) : null })],
+    ['Indeed', ({ q, loc, days, remote, country }) => withParams(`https://${INDEED_HOST[country] || 'www.indeed.com'}/jobs`, {
       q, l: loc || (remote ? 'Remote' : ''), fromage: days ? roundUp([1, 3, 7, 14], days) : null })],
-    ['Glassdoor', ({ q, loc, days, remote }) => withParams('https://www.glassdoor.com/Job/jobs.htm', {
+    ['Glassdoor', ({ q, loc, days, remote, country }) => withParams(`https://${GLASSDOOR_HOST[country] || 'www.glassdoor.com'}/Job/jobs.htm`, {
       'sc.keyword': q, locKeyword: loc, fromAge: days ? roundUp([1, 3, 7, 14, 30], days) : null, remoteWorkType: remote ? '1' : null })],
-    ['ZipRecruiter', ({ q, loc, days, remote }) => withParams('https://www.ziprecruiter.com/jobs-search', {
-      search: q, location: loc || (remote ? 'Remote' : ''), days: days ? roundUp([1, 5, 10, 30], days) : null })],
+    ['ZipRecruiter', ({ q, loc, days, remote, country }) => !isUS(country) ? null
+      : withParams('https://www.ziprecruiter.com/jobs-search', {
+        search: q, location: loc || (remote ? 'Remote' : ''), days: days ? roundUp([1, 5, 10, 30], days) : null })],
     ['Google Jobs', ({ q, loc, days, remote }) => {
       const chip = days ? { 1: 'today', 3: '3days', 7: 'week', 30: 'month' }[roundUp([1, 3, 7, 30], days)] : null;
       return withParams('https://www.google.com/search', {
         q: `${q} jobs${remote ? ' remote' : ''}${loc ? ' in ' + loc : ''}`, ibp: 'htl;jobs', htichips: chip ? `date_posted:${chip}` : null });
     }],
-    ['Dice', ({ q, loc, days, remote }) => withParams('https://www.dice.com/jobs', {
-      q, location: loc, 'filters.postedDate': days ? { 1: 'ONE', 3: 'THREE', 7: 'SEVEN' }[roundUp([1, 3, 7], days)] : null,
-      'filters.workplaceTypes': remote ? 'Remote' : null })],
+    ['Dice', ({ q, loc, days, remote, country }) => !isUS(country) ? null
+      : withParams('https://www.dice.com/jobs', {
+        q, location: loc, 'filters.postedDate': days ? { 1: 'ONE', 3: 'THREE', 7: 'SEVEN' }[roundUp([1, 3, 7], days)] : null,
+        'filters.workplaceTypes': remote ? 'Remote' : null })],
   ];
 
   function boardQuery() {
@@ -632,14 +698,25 @@
     const days = boardDays();
     const when = days ? (DATE_PHRASE[String(days)] || `in the past ${days} days`) : 'any time';
     el.boardsQuery.textContent = q ? `for “${q}”, posted ${when}` : 'Add keywords or upload a resume to enable these links.';
-    const params = { q, loc: el.location.value.trim(), days, remote: state.remoteOnly };
-    el.boardLinks.replaceChildren(...BOARDS.map(([name, build]) => {
+    const typedRemote = state.loc?.kind === 'remote';
+    const params = {
+      q,
+      loc: typedRemote ? '' : el.location.value.trim(),
+      days,
+      remote: typedRemote || state.workType === 'remote',
+      country: state.loc?.country || null,
+    };
+    const links = [];
+    for (const [name, build] of BOARDS) {
+      const href = q ? build(params) : '#';
+      if (href === null) continue;
       const a = make('a', '', name);
       a.target = '_blank';
       a.rel = 'noopener';
-      a.href = q ? build(params) : '#';
-      return a;
-    }));
+      a.href = href;
+      links.push(a);
+    }
+    el.boardLinks.replaceChildren(...links);
   }
 
   // --------------------------------------------------------------- init --
@@ -669,8 +746,9 @@
 
   el.location.value = prefs.get('location', '');
   el.sort.value = state.sort;
-  el.remoteOnly.checked = state.remoteOnly;
+  el.workType.value = state.workType;
   renderKeywords();
   render();
   loadSources();
+  if (el.location.value.trim()) lookupLocation();
 })();
