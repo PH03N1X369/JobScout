@@ -220,6 +220,8 @@ def classify(job, place):
     if place.kind == "remote":
         return "remote" if remote else None
 
+    if job.get("_near") and not remote:
+        return "local"  # the source itself searched this place
     city_re, country_re, region_re = _matchers(place)
     if city_re and city_re.search(text):
         return "local"

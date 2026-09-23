@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 
 import requests
 
+from company_boards import COMPANY_BOARDS
+from locations import COUNTRIES, classify, resolve
+
 USER_AGENT = "JobScout/1.0 (personal job search tool)"
 CACHE_TTL_SECONDS = 30 * 60
 CACHE_MAX_ENTRIES = 120
@@ -23,6 +26,17 @@ REQUEST_TIMEOUT = 15
 
 _cache = {}
 _cache_lock = threading.Lock()
+
+
+def _http_json(url, params=None, headers=None):
+    resp = requests.get(
+        url,
+        params=params,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})},
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _get_json(url, params=None, headers=None):
@@ -33,14 +47,7 @@ def _get_json(url, params=None, headers=None):
         hit = _cache.get(key)
         if hit and hit[0] > now:
             return hit[1]
-    resp = requests.get(
-        url,
-        params=params,
-        headers={"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})},
-        timeout=REQUEST_TIMEOUT,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    data = _http_json(url, params, headers)
     with _cache_lock:
         if len(_cache) >= CACHE_MAX_ENTRIES:
             # Drop expired entries first, then the oldest, to keep memory bounded.
@@ -52,7 +59,7 @@ def _get_json(url, params=None, headers=None):
     return data
 
 
-def _gather(fn, items):
+def _gather(fn, items, max_workers=8):
     """Run fn over items in parallel; tolerate partial failure, raise only if all fail."""
     if not items:
         return []
@@ -65,7 +72,7 @@ def _gather(fn, items):
             errors.append(exc)
             return []
 
-    with ThreadPoolExecutor(max_workers=min(8, len(items))) as pool:
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
         for batch in pool.map(safe, items):
             results.extend(batch)
     if errors and len(errors) == len(items):
@@ -138,13 +145,15 @@ def format_salary(lo, hi, currency="USD", period=None):
 
 
 def make_job(*, source, title, company, url, posted, location="", tags=(), description="",
-             salary=None, job_type="", remote=None, where=None):
-    """`where` is the full location list when `location` is a shortened display version."""
+             salary=None, job_type="", remote=None, where=None, near=False):
+    """`where`: full location text when `location` is a shortened display version.
+    `near`: the source already limited results to the searched place (e.g. Adzuna's `where`)."""
     title = html_to_text(title, 200)
     if not title or not isinstance(url, str) or not url.startswith(("http://", "https://")):
         return None
     return {
         "_where": where or "",
+        "_near": near,
         "id": hashlib.sha1(f"{source}|{url}".encode()).hexdigest()[:16],
         "title": title,
         "company": html_to_text(company, 120) or "Unknown company",
@@ -361,13 +370,16 @@ def fetch_adzuna(terms, place):
         jobs = []
         for j in data.get("results", []):
             title = j.get("title") or ""
+            loc = j.get("location") or {}
             jobs.append(make_job(
                 source="Adzuna",
                 title=title,
                 company=(j.get("company") or {}).get("display_name"),
                 url=j.get("redirect_url"),
                 posted=j.get("created"),
-                location=(j.get("location") or {}).get("display_name", ""),
+                location=loc.get("display_name", ""),
+                where=", ".join(loc.get("area") or []),  # e.g. India, Karnataka, Bangalore
+                near=bool(where) or place.kind == "country",
                 tags=[(j.get("category") or {}).get("label", "")],
                 description=j.get("description"),
                 salary=format_salary(j.get("salary_min"), j.get("salary_max"), currency, "year"),
@@ -379,8 +391,85 @@ def fetch_adzuna(terms, place):
     return _gather(query, list(terms[:3]))
 
 
+# ------------------------------------------------ company career boards ---
+
+BOARD_TTL_SECONDS = 60 * 60
+_board_cache = {}
+_board_lock = threading.Lock()
+
+
+def _split_camel(value):
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", value or "").capitalize()
+
+
+def _read_board(ats, slug, company):
+    """All postings on one company's board, normalized."""
+    if ats == "greenhouse":
+        data = _http_json(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs")
+        for j in data.get("jobs", []):
+            loc = (j.get("location") or {}).get("name", "")
+            yield make_job(
+                source="Company careers", title=j.get("title"), company=j.get("company_name") or company,
+                url=j.get("absolute_url"), posted=j.get("first_published") or j.get("updated_at"),
+                location=loc, remote="remote" in loc.lower(),
+            )
+    elif ats == "lever":
+        for j in _http_json(f"https://api.lever.co/v0/postings/{slug}", {"mode": "json"}):
+            cat = j.get("categories") or {}
+            loc = cat.get("location") or ""
+            country = COUNTRIES.get(j.get("country") or "", ("",))[0]
+            yield make_job(
+                source="Company careers", title=j.get("text"), company=company,
+                url=j.get("hostedUrl"), posted=(j.get("createdAt") or 0) / 1000 or None,
+                location=loc.title() if loc.islower() else loc,
+                where=", ".join((cat.get("allLocations") or [loc]) + [country]),
+                tags=[cat.get("team"), cat.get("department")],
+                description=j.get("descriptionPlain"),
+                job_type=(cat.get("commitment") or "").capitalize(),
+                remote=j.get("workplaceType") == "remote" or "remote" in loc.lower(),
+            )
+    elif ats == "ashby":
+        data = _http_json(f"https://api.ashbyhq.com/posting-api/job-board/{slug}")
+        for j in data.get("jobs", []):
+            places = [j.get("location") or ""] + [s.get("location", "") for s in j.get("secondaryLocations") or []]
+            country = ((j.get("address") or {}).get("postalAddress") or {}).get("addressCountry") or ""
+            yield make_job(
+                source="Company careers", title=j.get("title"), company=company,
+                url=j.get("jobUrl"), posted=j.get("publishedAt"),
+                location=places[0], where=", ".join(places + [country]),
+                tags=[j.get("department"), j.get("team")],
+                description=j.get("descriptionPlain"),
+                job_type=_split_camel(j.get("employmentType")),
+                remote=bool(j.get("isRemote")) or (j.get("workplaceType") or "").lower() == "remote",
+            )
+
+
+def fetch_company_boards(terms, place):
+    boards = COMPANY_BOARDS.get(place.country)
+    if not boards:
+        return []
+    in_country = resolve(COUNTRIES[place.country][0])
+
+    def board(entry):
+        ats, slug, company = entry
+        key = (ats, slug, place.country)
+        now = time.time()
+        with _board_lock:
+            hit = _board_cache.get(key)
+            if hit and hit[0] > now:
+                return hit[1]
+        # Keep only this country's postings; the rest of a global board is dead weight.
+        jobs = [j for j in _read_board(ats, slug, company) if j and classify(j, in_country)]
+        with _board_lock:
+            _board_cache[key] = (now + BOARD_TTL_SECONDS, jobs)
+        return jobs
+
+    return _gather(board, boards, max_workers=16)
+
+
 SOURCES = [
     # name, fetcher, homepage, required env vars
+    ("Company careers", fetch_company_boards, None, ()),
     ("Himalayas", fetch_himalayas, "https://himalayas.app/jobs", ()),
     ("Jobicy", fetch_jobicy, "https://jobicy.com", ()),
     ("Remote OK", fetch_remoteok, "https://remoteok.com", ()),
@@ -395,8 +484,15 @@ def _enabled(env):
     return all(os.environ.get(v) for v in env)
 
 
+def _label(name):
+    if name == "Company careers":
+        return f"{len(sum(COMPANY_BOARDS.values(), []))} company career pages " \
+               f"(for locations in {', '.join(COUNTRIES[c][0] for c in COMPANY_BOARDS)})"
+    return name
+
+
 def source_status():
-    return [{"name": name, "homepage": home, "enabled": _enabled(env), "requires": list(env)}
+    return [{"name": name, "label": _label(name), "homepage": home, "enabled": _enabled(env), "requires": list(env)}
             for name, _, home, env in SOURCES]
 
 

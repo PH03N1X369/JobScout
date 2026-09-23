@@ -12,11 +12,13 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 load_dotenv()
 
-from locations import resolve  # noqa: E402
+from company_boards import COMPANY_BOARDS  # noqa: E402
+from locations import COUNTRIES, resolve  # noqa: E402
 from ranking import pick_search_terms, rank_jobs  # noqa: E402
 from resume_parser import ResumeParseError, extract_text  # noqa: E402
 from skills import canonical_skill, canonical_title, extract_skills, extract_titles  # noqa: E402
-from sources import ADZUNA_COUNTRIES, fetch_all, source_status  # noqa: E402
+from sources import (ADZUNA_COUNTRIES, BOARD_TTL_SECONDS, fetch_all, fetch_company_boards,  # noqa: E402
+                     source_status)
 
 MAX_UPLOAD_MB = 5
 
@@ -74,6 +76,22 @@ def rate_limited(limiter, message):
 
 search_limiter = RateLimiter(limit=12, window_seconds=60)
 upload_limiter = RateLimiter(limit=10, window_seconds=60)
+
+
+def _keep_company_boards_warm():
+    """Reading ~40 career boards takes ~10 s, so do it in the background at startup
+    and refresh before the cache expires, instead of making a visitor wait."""
+    while True:
+        for code in COMPANY_BOARDS:
+            try:
+                fetch_company_boards([], resolve(COUNTRIES[code][0]))
+            except Exception:
+                pass  # a later search simply fetches whatever is missing
+        time.sleep(BOARD_TTL_SECONDS - 5 * 60)
+
+
+if os.environ.get("JOBSCOUT_PREWARM", "1") == "1":
+    threading.Thread(target=_keep_company_boards_warm, daemon=True).start()
 
 
 @app.get("/")
@@ -146,15 +164,18 @@ def _coverage_tip(place, jobs):
     """Explain thin local results: the keyless sources are mostly remote-job boards."""
     if place.kind not in ("city", "country", "unknown"):
         return None
-    if sum(1 for j in jobs if j["locationMatch"] == "local") >= 5:
+    local = sum(1 for j in jobs if j["locationMatch"] == "local")
+    if local >= 10:
         return None
     enabled = {s["name"] for s in source_status() if s["enabled"]}
     if {"Adzuna", "JSearch"} & enabled:
         return None
     keys = ["Adzuna", "JSearch"] if not place.country or place.country.lower() in ADZUNA_COUNTRIES else ["JSearch"]
-    return (f"Few on-site jobs in {place.label} come from the free sources, which mostly list remote roles. "
-            f"Use the job board links for local listings, or add a free {' or '.join(keys)} API key "
-            f"(see README) to include them here.")
+    found = f"Only {local} on-site job{'' if local == 1 else 's'} in {place.label} matched" if local else \
+        f"No on-site jobs in {place.label} matched"
+    return (f"{found}: the free sources are mostly remote-job boards plus a set of company career pages. "
+            f"Use the job board links for more local listings, or add a free {' or '.join(keys)} API key "
+            f"(see README) to include far more local jobs here.")
 
 
 @app.get("/api/location")

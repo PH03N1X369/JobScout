@@ -598,7 +598,7 @@
     } else {
       posted.textContent = 'Date unknown';
     }
-    node.querySelector('.source').textContent = `via ${job.source}`;
+    node.querySelector('.source').textContent = job.source === 'Company careers' ? 'via careers page' : `via ${job.source}`;
 
     const matched = node.querySelector('.matched');
     for (const k of job.matched.keywords) matched.append(make('span', 'tag kw', k));
@@ -729,12 +729,16 @@
       const off = list.filter((s) => !s.enabled);
       const line = make('p');
       line.append(document.createTextNode('Listings from '));
+      on.sort((a, b) => !a.homepage - !b.homepage);  // linked sources first, descriptive ones last
       on.forEach((s, i) => {
-        const a = make('a', '', s.name);
-        a.href = s.homepage;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        line.append(a, document.createTextNode(i < on.length - 2 ? ', ' : i === on.length - 2 ? ' and ' : '.'));
+        let item = document.createTextNode(s.label || s.name);
+        if (s.homepage) {
+          item = make('a', '', s.label || s.name);
+          item.href = s.homepage;
+          item.target = '_blank';
+          item.rel = 'noopener';
+        }
+        line.append(item, document.createTextNode(i < on.length - 2 ? ', ' : i === on.length - 2 ? ' and ' : '.'));
       });
       el.sourcesNote.replaceChildren(line);
       if (off.length) {

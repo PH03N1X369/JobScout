@@ -69,9 +69,15 @@ Works out of the box with these free, keyless APIs:
 | Remote OK | Remote jobs, mostly tech                  | Latest feed (~100)              |
 | Remotive  | Remote jobs                               | Latest feed (small sample)      |
 | Arbeitnow | Jobs in Europe (mainly Germany), incl. on-site | Latest ~500               |
+| Company careers | **On-site and remote jobs in India** from ~40 companies' own career pages (CRED, Groww, Meesho, Paytm, Okta, Stripe, Databricks, …) | Only for locations in India |
 
-The free sources lean toward **remote** and **tech** roles. For broad coverage, including on-site
-jobs from LinkedIn, Indeed, Glassdoor and company career pages, add one or both optional keys.
+**Company careers** reads the public job-board feeds that companies publish through their hiring
+platform (Greenhouse, Lever, Ashby). It keeps only each board's Indian jobs, about 1,400 in total,
+refreshed hourly in the background. To add a company or another country, edit
+[`company_boards.py`](company_boards.py); the file explains how to find a company's board name.
+
+The other free sources lean toward **remote** and **tech** roles. For broad coverage, including
+on-site jobs from LinkedIn, Indeed, Naukri and Glassdoor, add one or both optional keys.
 Copy `.env.example` to `.env` and fill in:
 
 - **JSearch** (`RAPIDAPI_KEY`): aggregates Google for Jobs. Free tier on
